@@ -1,0 +1,16 @@
+build/
+build-*/
+cmake-build-*/
+.idea/
+.vscode/
+.DS_Store
+.localized
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.log
+rpi_test_screenshot*.png
