@@ -1,4 +1,4 @@
-<h1 align="center">Raspberry PI Fans Control</h1>
+<h1 align="center">RPI5 FUN CTRL</h1>
 
 <p align="center">
   <strong>Terminal dashboard and fan control utility for Raspberry Pi 5.</strong>
@@ -12,15 +12,24 @@
 </p>
 
 <p align="center">
-  RPI5 FUN gives you a fast SSH-friendly monitor for CPU temperature, CPU frequency, per-core load, GPU load, RAM, load average and fan state, plus direct manual PWM control and auto/manual switching in one terminal app.
+  RPI5 FUN CTRL gives you a fast SSH-friendly monitor for CPU temperature, CPU speed, per-core load, GPU load, RAM, load average and fan state, plus direct manual PWM control, logs and auto/manual switching in one terminal app.
 </p>
 
-## **Download link (Debian/Raspberry Pi OS)**
+## **Copy -> paste -> run**
 
 ```bash
 git clone https://github.com/DeziXsteroid/Raspberry-Fans-Control.git && cd Raspberry-Fans-Control && chmod +x run.sh && ./run.sh
 ```
 
+**What this command does**
+
+> clones the repository
+>
+> configures the project with CMake
+>
+> builds the binary
+>
+> starts `Raspberry_Fun_Control`
 
 ## **Project Preview**
 
@@ -29,16 +38,18 @@ git clone https://github.com/DeziXsteroid/Raspberry-Fans-Control.git && cd Raspb
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/fans-control.png" alt="Fans Control" width="900" />
+  <img src="assets/screenshots/main-menu.png" alt="Main Menu" width="900" />
 </p>
 
-## **Why This Project?**
+## **Why This Project Is Cool**
 
 > **Live terminal UI** that works well directly on Raspberry Pi and over SSH
 >
 > **Manual fan control** with fixed PWM hold
 >
 > **Auto fan mode** with proper manual release
+>
+> **Built-in logs screen** for fan actions and live telemetry
 >
 > **Runtime settings** for Linux paths right inside the app
 >
@@ -64,9 +75,10 @@ sudo ./build/Raspberry_Fun_Control
 
 - `1` Start Auto Check
 - `2` Fans Control
-- `3` Settings
-- `4` Help And Info
-- `5` Exit
+- `3` Logs
+- `4` Settings
+- `5` Help And Info
+- `6` Exit
 
 </details>
 
@@ -84,8 +96,6 @@ sudo ./build/Raspberry_Fun_Control
 - `2` fan off
 - `3` set custom PWM value
 - `4` auto mode
-- `5` memory mode ON
-- `6` memory mode OFF
 - `0` back
 
 </details>
@@ -104,11 +114,20 @@ sudo ./build/Raspberry_Fun_Control
 >
 > **Fan status** with RPM, PWM and current mode
 >
+> **Built-in log viewer** with auto reset after 1 MB
+>
 > **Live history strip** with low, medium and high visual levels
 >
 > **Runtime settings editor** for Linux paths
->
-> **Experimental GPIO memory mode**
+
+## **Repository Layout**
+
+- `main.cpp` terminal UI, menus and live screens
+- `Status_Sys.cpp` system metrics collection
+- `FanControl_Sys.cpp` fan control logic
+- `Temperature_Sys.cpp` CPU temperature reader
+- `Paths_Sys.h` default paths and startup settings
+- `run.sh` one-command build and launch helper
 
 ## **Requirements**
 

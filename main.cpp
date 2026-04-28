@@ -1,5 +1,8 @@
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <ctime>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -27,6 +30,9 @@ const int HISTORY_WIDTH = 28;
 const int RIGHT_VALUE_WIDTH = 18;
 const int FOOTER_LOAD_COLUMN = 50;
 const std::size_t HISTORY_LIMIT = 48;
+const int HISTORY_SLOT_WIDTH = 1;
+const long long LOG_FILE_LIMIT_BYTES = 1024 * 1024;
+const char* LOG_FILE_NAME = "rpi5_fun.log";
 
 struct UiHistory {
     std::vector<double> temp;
@@ -83,6 +89,8 @@ std::string Color256(int color_code) {
     return "\033[38;5;" + std::to_string(color_code) + "m";
 }
 
+std::string GetFanModeText(const SystemInfo& info);
+
 int GetTerminalColumns() {
     winsize size;
     if (isatty(STDOUT_FILENO) != 0 && ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0 && size.ws_col > 0) {
@@ -90,6 +98,15 @@ int GetTerminalColumns() {
     }
 
     return 100;
+}
+
+int GetTerminalRows() {
+    winsize size;
+    if (isatty(STDOUT_FILENO) != 0 && ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0 && size.ws_row > 0) {
+        return static_cast<int>(size.ws_row);
+    }
+
+    return 30;
 }
 
 void ClearScreen() {
@@ -133,6 +150,71 @@ std::string ToText(double value, int precision) {
     std::ostringstream out;
     out << std::fixed << std::setprecision(precision) << value;
     return out.str();
+}
+
+std::string MakeSpaces(int count) {
+    if (count <= 0) {
+        return "";
+    }
+
+    return std::string(static_cast<std::size_t>(count), ' ');
+}
+
+std::string RepeatText(const std::string& text, int count) {
+    if (count <= 0) {
+        return "";
+    }
+
+    std::string out;
+    for (int i = 0; i < count; ++i) {
+        out += text;
+    }
+    return out;
+}
+
+int GetVisibleTextWidth(const std::string& text) {
+    int width = 0;
+
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        unsigned char symbol = static_cast<unsigned char>(text[i]);
+
+        if (symbol == '\033') {
+            while (i < text.size() && text[i] != 'm') {
+                ++i;
+            }
+            continue;
+        }
+
+        if ((symbol & 0xC0u) != 0x80u) {
+            ++width;
+        }
+    }
+
+    return width;
+}
+
+std::string CenterPlainText(const std::string& text, int width) {
+    int text_width = GetVisibleTextWidth(text);
+    if (text_width >= width) {
+        return text;
+    }
+
+    int free_space = width - text_width;
+    int left_padding = free_space / 2;
+    int right_padding = free_space - left_padding;
+    return MakeSpaces(left_padding) + text + MakeSpaces(right_padding);
+}
+
+void PrintCenteredLine(const std::string& text) {
+    int columns = GetTerminalColumns();
+    int visible_width = GetVisibleTextWidth(text);
+    int left_padding = 0;
+
+    if (columns > visible_width) {
+        left_padding = (columns - visible_width) / 2;
+    }
+
+    std::cout << MakeSpaces(left_padding) << text << "\n";
 }
 
 int LimitInt(int value, int min_value, int max_value) {
@@ -238,15 +320,19 @@ int GetTempRampColor(double position_percent) {
 }
 
 int GetFreqRampColor(double position_percent) {
-    if (position_percent < 45.0) {
+    if (position_percent < 30.0) {
         return 117;
     }
 
-    if (position_percent < 75.0) {
-        return 81;
+    if (position_percent < 55.0) {
+        return 121;
     }
 
-    return 45;
+    if (position_percent < 80.0) {
+        return 228;
+    }
+
+    return 196;
 }
 
 int PickBarColor(const std::string& theme, double position_percent) {
@@ -340,7 +426,7 @@ MetricLayout GetMetricLayout() {
         return METRIC_NAME_WIDTH + 1 +
                layout.left_width + 1 +
                layout.bar_width + 2 +
-               layout.history_width + 3 +
+               layout.history_width * HISTORY_SLOT_WIDTH + 3 +
                layout.right_width;
     };
 
@@ -360,7 +446,7 @@ MetricLayout GetMetricLayout() {
         --layout.right_width;
     }
 
-    while (total_width() > columns - 2 && layout.history_width > 6) {
+    while (total_width() > columns - 2 && layout.history_width > 5) {
         --layout.history_width;
     }
 
@@ -396,16 +482,8 @@ int PickHistoryTrafficColor(double percent) {
 }
 
 std::string PickHistoryTrafficGlyph(double percent) {
-    if (percent >= 88.0) {
-        return COLOR_RESET + std::string("\033[38;2;255;24;0m") + u8"│";
-    }
-
-    if (percent >= 55.0) {
-        return COLOR_RESET + Color256(228) + u8"╻";
-    }
-
     if (percent >= 8.0) {
-        return COLOR_RESET + Color256(120) + u8"╵";
+        return COLOR_RESET + Color256(PickHistoryTrafficColor(percent)) + "|";
     }
 
     return COLOR_RESET + Color256(238) + ".";
@@ -479,6 +557,117 @@ std::string PadRightText(const std::string& text, int width) {
     return text + std::string(static_cast<std::size_t>(width - static_cast<int>(text.size())), ' ');
 }
 
+bool ResetLogFileIfNeeded(const std::string& path) {
+    std::ifstream file(path.c_str(), std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        return false;
+    }
+
+    long long size = static_cast<long long>(file.tellg());
+    if (size <= LOG_FILE_LIMIT_BYTES) {
+        return false;
+    }
+
+    std::ofstream clear_file(path.c_str(), std::ios::trunc);
+    return clear_file.is_open();
+}
+
+std::string BuildLogTimestamp() {
+    std::time_t now = std::time(nullptr);
+    std::tm local_time {};
+    localtime_r(&now, &local_time);
+
+    std::ostringstream out;
+    out << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S");
+    return out.str();
+}
+
+std::string GetLogFilePath() {
+    return LOG_FILE_NAME;
+}
+
+void AppendLogEntry(const std::string& tag, const std::string& text) {
+    std::string path = GetLogFilePath();
+    bool was_reset = ResetLogFileIfNeeded(path);
+
+    std::ofstream file(path.c_str(), std::ios::app);
+    if (!file.is_open()) {
+        return;
+    }
+
+    if (was_reset) {
+        file << BuildLogTimestamp() << " | SYSTEM | Log file reset after 1 MB limit.\n";
+    }
+
+    file << BuildLogTimestamp() << " | " << tag << " | " << text << "\n";
+}
+
+std::string BuildSystemLogText(const SystemInfo& info) {
+    std::ostringstream out;
+    out << "TEMP "
+        << (info.cpu_temp_ok ? ToText(info.cpu_temp, 1) + "C" : "N/A")
+        << " | SPEED "
+        << (info.cpu_freq_ok ? ToText(info.cpu_freq_ghz, 2) + " GHz" : "N/A")
+        << " | CPU "
+        << (info.cpu_total_ok ? ToText(info.cpu_total_usage, 1) + "%" : "N/A")
+        << " | LOAD "
+        << (info.load_ok ? ToText(info.load1, 2) + " " + ToText(info.load5, 2) + " " + ToText(info.load15, 2)
+                         : "N/A")
+        << " | FAN "
+        << GetFanModeText(info)
+        << " | PWM "
+        << (info.fan_pwm_ok ? std::to_string(info.fan_pwm) + "/255" : "N/A")
+        << " | RPM "
+        << (info.fan_rpm_ok ? std::to_string(info.fan_rpm) : "N/A");
+    return out.str();
+}
+
+void AppendSystemLogEntry(const std::string& source, const SystemInfo& info) {
+    AppendLogEntry(source, BuildSystemLogText(info));
+}
+
+std::vector<std::string> ReadLogLines() {
+    std::vector<std::string> lines;
+    std::ifstream file(GetLogFilePath().c_str());
+    if (!file.is_open()) {
+        return lines;
+    }
+
+    std::string line;
+    while (std::getline(file, line)) {
+        lines.push_back(line);
+    }
+
+    return lines;
+}
+
+std::vector<std::string> BuildLogViewerLines(const Settings& settings) {
+    std::vector<std::string> lines;
+    std::vector<std::string> file_lines = ReadLogLines();
+    int max_visible = std::max(8, GetTerminalRows() - 14);
+    int line_width = std::max(40, GetTerminalColumns() - 2);
+
+    lines.push_back("File : " + GetLogFilePath() + "   Max size : 1 MB   Auto refresh : " +
+                    std::to_string(settings.auto_check_seconds) + " sec");
+    lines.push_back("");
+
+    if (file_lines.empty()) {
+        lines.push_back("No log entries yet.");
+        return lines;
+    }
+
+    std::size_t start = 0;
+    if (file_lines.size() > static_cast<std::size_t>(max_visible)) {
+        start = file_lines.size() - static_cast<std::size_t>(max_visible);
+    }
+
+    for (std::size_t i = start; i < file_lines.size(); ++i) {
+        lines.push_back(FitText(file_lines[i], line_width));
+    }
+
+    return lines;
+}
+
 std::string GetFanModeText(const SystemInfo& info) {
     if (!info.fan_mode_ok) {
         return "N/A";
@@ -501,12 +690,12 @@ std::string GetFanModeText(const SystemInfo& info) {
 
 void PrintTitle() {
     std::vector<std::string> title_lines;
-    title_lines.push_back(u8"██████╗ ██████╗ ██╗███████╗   ███████╗██╗   ██╗███╗   ██╗");
-    title_lines.push_back(u8"██╔══██╗██╔══██╗██║██╔════╝   ██╔════╝██║   ██║████╗  ██║");
-    title_lines.push_back(u8"██████╔╝██████╔╝██║███████╗   █████╗  ██║   ██║██╔██╗ ██║");
-    title_lines.push_back(u8"██╔══██╗██╔═══╝ ██║╚════██║   ██╔══╝  ██║   ██║██║╚██╗██║");
-    title_lines.push_back(u8"██║  ██║██║     ██║███████║   ██║     ╚██████╔╝██║ ╚████║");
-    title_lines.push_back(u8"╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝   ╚═╝      ╚═════╝ ╚═╝  ╚═══╝");
+    title_lines.push_back(u8"██████╗ ██████╗ ██╗███████╗   ███████╗██╗   ██╗███╗   ██╗    ██████╗████████╗██████╗ ██╗     ");
+    title_lines.push_back(u8"██╔══██╗██╔══██╗██║██╔════╝   ██╔════╝██║   ██║████╗  ██║   ██╔════╝╚══██╔══╝██╔══██╗██║     ");
+    title_lines.push_back(u8"██████╔╝██████╔╝██║███████╗   █████╗  ██║   ██║██╔██╗ ██║   ██║        ██║   ██████╔╝██║     ");
+    title_lines.push_back(u8"██╔══██╗██╔═══╝ ██║╚════██║   ██╔══╝  ██║   ██║██║╚██╗██║   ██║        ██║   ██╔══██╗██║     ");
+    title_lines.push_back(u8"██║  ██║██║     ██║███████║   ██║     ╚██████╔╝██║ ╚████║   ╚██████╗   ██║   ██║  ██║███████╗");
+    title_lines.push_back(u8"╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝   ╚═╝      ╚═════╝ ╚═╝  ╚═══╝    ╚═════╝   ╚═╝   ╚═╝  ╚═╝╚══════╝");
 
     for (std::size_t i = 0; i < title_lines.size(); ++i) {
         int color = 51;
@@ -520,15 +709,28 @@ void PrintTitle() {
             continue;
         }
 
-        std::cout << Color256(color) << title_lines[i] << "\n";
+        PrintCenteredLine(" " + Color256(color) + title_lines[i] + COLOR_RESET);
     }
 
-    std::cout << COLOR_RESET;
-    std::cout << COLOR_BOLD << getAppName() << COLOR_RESET
-              << " | " << getAppVersion() << "\n";
-    std::cout << Color256(240)
-              << "=====================================================================================\n"
-              << COLOR_RESET;
+    PrintCenteredLine(" " + COLOR_BOLD + getAppName() + COLOR_RESET +
+                      " | " + getAppVersion());
+    PrintCenteredLine(" " + Color256(240) + RepeatText("=", 85) + COLOR_RESET);
+}
+
+void PrintMainMenuPanel() {
+    const std::vector<std::string> lines = {
+        u8"┌──────────────────────────────────────────────────┐",
+        u8"│            Main Menu by DeziXsteroid             │",
+        u8"│                                                  │",
+        u8"│ 1. Start Auto Check              2. Fans Control │",
+        u8"│ 3. Logs                          4. Settings     │",
+        u8"│ 5. Help And Info                 6. Exit         │",
+        u8"└──────────────────────────────────────────────────┘"
+    };
+
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        PrintCenteredLine(lines[i]);
+    }
 }
 
 std::vector<std::string> BuildStatusLines(const SystemInfo& info) {
@@ -547,13 +749,13 @@ std::vector<std::string> BuildStatusLines(const SystemInfo& info) {
     }
 
     if (info.cpu_freq_ok) {
-        AppendCompactMetricLine(lines, "FREQ", true, GetFrequencyPercent(info.cpu_freq_ghz), "freq",
+        AppendCompactMetricLine(lines, "SPEED", true, GetFrequencyPercent(info.cpu_freq_ghz), "freq",
                                 history.freq,
                                 ToText(info.cpu_freq_ghz, 2) + "GHz",
                                 ToText(info.cpu_freq_ghz, 2) + " GHz",
                                 layout);
     } else {
-        AppendCompactMetricLine(lines, "FREQ", false, 0.0, "freq", history.freq, "N/A", "N/A", layout);
+        AppendCompactMetricLine(lines, "SPEED", false, 0.0, "freq", history.freq, "N/A", "N/A", layout);
     }
 
     AppendCompactMetricLine(lines, "CPU", info.cpu_total_ok, info.cpu_total_usage, "cpu",
@@ -778,6 +980,7 @@ void StartAutoCheck(const Settings& settings) {
         ApplyManualFanHoldIfNeeded(settings);
         SystemInfo info = ReadSystemInfo(settings);
         UpdateUiHistory(info);
+        AppendSystemLogEntry("AUTO", info);
         std::vector<std::string> lines = BuildStatusLines(info);
 
         if (!first_draw) {
@@ -795,6 +998,64 @@ void StartAutoCheck(const Settings& settings) {
                 input_tail += ReadInputChunk();
 
                 if (InputHasStopCommand(input_tail)) {
+                    TurnOffRawMode(old_settings, raw_mode);
+                    std::cout << "\033[?25h";
+                    std::cout.flush();
+                    return;
+                }
+
+                if (input_tail.size() > 8) {
+                    input_tail = input_tail.substr(input_tail.size() - 8);
+                }
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    }
+}
+
+void ShowLogsMenu(const Settings& settings) {
+    termios old_settings;
+    bool raw_mode = TurnOnRawMode(old_settings);
+    std::string input_tail;
+    bool need_full_redraw = true;
+    int previous_line_count = 0;
+
+    std::cout << "\033[?25l";
+    std::cout.flush();
+
+    while (true) {
+        if (need_full_redraw) {
+            ClearScreen();
+            PrintTitle();
+            std::cout << "LOGS | Press 0, Q or Й to back\n\n";
+        } else if (previous_line_count > 0) {
+            MoveCursorUp(previous_line_count);
+        }
+
+        std::vector<std::string> lines = BuildLogViewerLines(settings);
+        PrintStatusLines(lines);
+        previous_line_count = static_cast<int>(lines.size());
+        need_full_redraw = false;
+
+        int wait_ms = settings.auto_check_seconds * 1000;
+        if (wait_ms < 300) {
+            wait_ms = 300;
+        }
+
+        for (int passed = 0; passed < wait_ms; passed += 50) {
+            if (KeyWasPressed()) {
+                input_tail += ReadInputChunk();
+
+                if (InputHasStopCommand(input_tail)) {
+                    TurnOffRawMode(old_settings, raw_mode);
+                    std::cout << "\033[?25h";
+                    std::cout.flush();
+                    return;
+                }
+
+                int command = ExtractDigitCommand(input_tail, 0, 0);
+                if (command == 0) {
                     TurnOffRawMode(old_settings, raw_mode);
                     std::cout << "\033[?25h";
                     std::cout.flush();
@@ -831,13 +1092,11 @@ void ShowSettingsMenu(Settings& settings) {
         std::cout << "8.  fan_rpm_path        = " << settings.fan_rpm_path << "\n";
         std::cout << "9.  fan_pwm_path        = " << settings.fan_pwm_path << "\n";
         std::cout << "10. fan_pwm_enable_path = " << settings.fan_pwm_enable_path << "\n";
-        std::cout << "11. gpiomem_path        = " << settings.gpiomem_path << "\n";
-        std::cout << "12. auto_refresh_seconds = " << settings.auto_check_seconds << "\n";
-        std::cout << "13. fan_gpio_pin        = " << settings.fan_gpio_pin << "\n";
-        std::cout << "14. Reset default settings\n";
+        std::cout << "11. auto_refresh_seconds = " << settings.auto_check_seconds << "\n";
+        std::cout << "12. Reset default settings\n";
         std::cout << "0. Back\n\n";
 
-        int choice = ReadNumber("Choose a number: ", 0, 14);
+        int choice = ReadNumber("Choose a number: ", 0, 12);
 
         if (choice == 0) {
             return;
@@ -864,12 +1123,8 @@ void ShowSettingsMenu(Settings& settings) {
         } else if (choice == 10) {
             ChangePath(settings.fan_pwm_enable_path, "fan_pwm_enable_path");
         } else if (choice == 11) {
-            ChangePath(settings.gpiomem_path, "gpiomem_path");
-        } else if (choice == 12) {
             settings.auto_check_seconds = ReadNumber("New auto_refresh_seconds (1..60): ", 1, 60);
-        } else if (choice == 13) {
-            settings.fan_gpio_pin = ReadNumber("New fan_gpio_pin (0..27): ", 0, 27);
-        } else if (choice == 14) {
+        } else if (choice == 12) {
             settings = MakeStartSettings();
         }
 
@@ -909,7 +1164,7 @@ std::vector<std::string> BuildFanLines(const Settings& settings,
     }
 
     lines.push_back("");
-    lines.push_back("Keys: 1 ON | 2 OFF | 3 SET PWM | 4 AUTO | 5 MEM ON | 6 MEM OFF | 0 BACK");
+    lines.push_back("Keys: 1 ON | 2 OFF | 3 SET PWM | 4 AUTO | 0 BACK");
     return lines;
 }
 
@@ -936,6 +1191,7 @@ void ShowFanMenu(const Settings& settings) {
 
         SystemInfo info = ReadSystemInfo(settings);
         UpdateUiHistory(info);
+        AppendSystemLogEntry("FAN", info);
 
         std::vector<std::string> lines = BuildFanLines(settings, info, action_message);
         PrintStatusLines(lines);
@@ -960,7 +1216,7 @@ void ShowFanMenu(const Settings& settings) {
                     return;
                 }
 
-                int command = ExtractDigitCommand(input_tail, 0, 6);
+                int command = ExtractDigitCommand(input_tail, 0, 4);
                 if (command == 0) {
                     TurnOffRawMode(old_settings, raw_mode);
                     std::cout << "\033[?25h";
@@ -974,10 +1230,12 @@ void ShowFanMenu(const Settings& settings) {
                     if (command == 1) {
                         if (TurnFanOn(settings, action_message)) {
                             RememberManualFanHold(255);
+                            AppendLogEntry("FAN", action_message);
                         }
                     } else if (command == 2) {
                         if (TurnFanOff(settings, action_message)) {
                             RememberManualFanHold(0);
+                            AppendLogEntry("FAN", action_message);
                         }
                     } else if (command == 3) {
                         TurnOffRawMode(old_settings, raw_mode);
@@ -987,6 +1245,7 @@ void ShowFanMenu(const Settings& settings) {
                         int value = ReadNumber("\nEnter PWM speed (0..255): ", 0, 255);
                         if (SetFanPwmValue(settings, value, action_message)) {
                             RememberManualFanHold(value);
+                            AppendLogEntry("FAN", action_message);
                         }
 
                         raw_mode = TurnOnRawMode(old_settings);
@@ -996,11 +1255,8 @@ void ShowFanMenu(const Settings& settings) {
                     } else if (command == 4) {
                         if (SetFanAutoMode(settings, action_message)) {
                             ClearManualFanHold();
+                            AppendLogEntry("FAN", action_message);
                         }
-                    } else if (command == 5) {
-                        SetFanMemoryState(settings, true, action_message);
-                    } else if (command == 6) {
-                        SetFanMemoryState(settings, false, action_message);
                     }
 
                     need_full_redraw = true;
@@ -1027,10 +1283,11 @@ void ShowHelp() {
     PrintTitle();
     std::cout << "HELP\n\n";
     std::cout << "1. Auto Check is now the main monitoring mode.\n";
-    std::cout << "2. History graph uses 3 levels: green low bar, yellow mid bar, red high bar.\n";
+    std::cout << "2. Right history graph uses equal-height lines with color levels and small gaps.\n";
     std::cout << "3. Press Q or Й to stop Auto Check.\n";
     std::cout << "4. Fan screen auto-refreshes with the same timer as monitor.\n";
-    std::cout << "5. GPU load is read from gpu_busy_path, and if it is empty then from gpu_stats_path.\n";
+    std::cout << "5. Logs screen stores fan actions and live telemetry, auto-clears after 1 MB.\n";
+    std::cout << "6. GPU load is read from gpu_busy_path, and if it is empty then from gpu_stats_path.\n";
     WaitEnter();
 }
 
@@ -1041,25 +1298,23 @@ int main() {
         ApplyManualFanHoldIfNeeded(settings);
         ClearScreen();
         PrintTitle();
+        std::cout << "\n";
+        PrintMainMenuPanel();
+        std::cout << "\n";
 
-        std::cout << "MAIN MENU\n\n";
-        std::cout << "1. Start Auto Check\n";
-        std::cout << "2. Fans Control\n";
-        std::cout << "3. Settings\n";
-        std::cout << "4. Help And Info\n";
-        std::cout << "5. Exit\n\n";
-
-        int choice = ReadNumber("Choose a number: ", 1, 5);
+        int choice = ReadNumber("Choose a number: ", 1, 6);
 
         if (choice == 1) {
             StartAutoCheck(settings);
         } else if (choice == 2) {
             ShowFanMenu(settings);
         } else if (choice == 3) {
-            ShowSettingsMenu(settings);
+            ShowLogsMenu(settings);
         } else if (choice == 4) {
-            ShowHelp();
+            ShowSettingsMenu(settings);
         } else if (choice == 5) {
+            ShowHelp();
+        } else if (choice == 6) {
             break;
         }
     }
