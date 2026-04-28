@@ -21,16 +21,6 @@
 git clone https://github.com/DeziXsteroid/Raspberry-Fans-Control.git && cd Raspberry-Fans-Control && chmod +x run.sh && ./run.sh
 ```
 
-**What this command does**
-
-> clones the repository
->
-> configures the project with CMake
->
-> builds the binary
->
-> starts `Raspberry_Fun_Control`
-
 ## **Project Preview**
 
 <p align="center">
