@@ -1,4 +1,4 @@
-<h1 align="center">Raspberry Fans Control</h1>
+<h1 align="center">Raspberry PI Fans Control</h1>
 
 <p align="center">
   <strong>Terminal dashboard and fan control utility for Raspberry Pi 5.</strong>
