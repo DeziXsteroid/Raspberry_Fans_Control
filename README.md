@@ -37,10 +37,6 @@ git clone https://github.com/DeziXsteroid/Raspberry-Fans-Control.git && cd Raspb
   <img src="assets/screenshots/auto-check.png" alt="Auto Check" width="900" />
 </p>
 
-<p align="center">
-  <img src="assets/screenshots/main-menu.png" alt="Main Menu" width="900" />
-</p>
-
 ## **Why This Project Is Cool**
 
 > **Live terminal UI** that works well directly on Raspberry Pi and over SSH
@@ -119,15 +115,6 @@ sudo ./build/Raspberry_Fun_Control
 > **Live history strip** with low, medium and high visual levels
 >
 > **Runtime settings editor** for Linux paths
-
-## **Repository Layout**
-
-- `main.cpp` terminal UI, menus and live screens
-- `Status_Sys.cpp` system metrics collection
-- `FanControl_Sys.cpp` fan control logic
-- `Temperature_Sys.cpp` CPU temperature reader
-- `Paths_Sys.h` default paths and startup settings
-- `run.sh` one-command build and launch helper
 
 ## **Requirements**
 
