@@ -27,7 +27,7 @@ git clone https://github.com/DeziXsteroid/Raspberry-Fans-Control.git && cd Raspb
   <img src="assets/screenshots/auto-check.png" alt="Auto Check" width="900" />
 </p>
 
-## **Why This Project Is Cool**
+## **Why This Project?**
 
 > **Live terminal UI** that works well directly on Raspberry Pi and over SSH
 >
@@ -43,7 +43,7 @@ git clone https://github.com/DeziXsteroid/Raspberry-Fans-Control.git && cd Raspb
 >
 > **Clean repository** with source code, docs and screenshots only
 
-## **Quick Guide**
+## **Quick Start Guide**
 
 <details>
 <summary><strong>Build manually</strong></summary>
